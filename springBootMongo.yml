@@ -1,141 +1,147 @@
-kind: ConfigMap
-apiVersion: v1
-metadata:
-  name: springappconfigmap
-data:
-  username: springapp
-  password: mongodb@123
-
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: springappsecrets
-type: Opaque
-stringData:   # We can define multiple key value pairs.
-  password: devdb@123
-
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: pv-hostpath
-spec:
-  storageClassName: manual
-  capacity:
-    storage: 1Gi
-  accessModes:
-  - ReadWriteOnce
-  hostPath:
-    path: "/tmp/mongodata"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: pvc-hostpath
-spec:
-  storageClassName: manual
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Mi
-
----
-## Spring Boot App
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: springappdeployment
+  name: springboot-deploy
+  namespace: test1
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: springapp
+      app: springboot
   template:
     metadata:
-      name: springapppod
       labels:
-        app: springapp
+        app: springboot
     spec:
       containers:
-      - name: springappcontainer
-        image: dockerhandson/spring-boot-mongo
+      - name: springbootcontainer
+        image: ajay66docker/spring-mongo-ajay:1
+        resources:
+          requests:
+            cpu: 200m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+            cpu: 300m
         ports:
         - containerPort: 8080
         env:
-        - name: MONGO_DB_USERNAME
-          valueFrom:
-            configMapKeyRef:
-              name: springappconfigmap
-              key: username
-        - name: MONGO_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: springappsecrets
-              key: password
         - name: MONGO_DB_HOSTNAME
-          value: mongo
+          value:  mongosvc
+        - name: MONGO_DB_USERNAME
+          value: devdb
+        - name: MONGO_DB_PASSWORD
+          value: devdb@123
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: springboot-hpa
+  namespace: test1
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: springboot-deploy
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 40
+  - type: Resource
+    resource:
+     name: memory
+     target:
+      type: Utilization
+      averageUtilization: 40
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: springapp
+  name: springbootsvc
+  namespace: test1
 spec:
+  type: NodePort
   selector:
-    app: springapp
+    app: springboot
   ports:
   - port: 80
     targetPort: 8080
-  type: NodePort
 ---
-# Mongo db pod with volumes(HostPath)
 apiVersion: apps/v1
-kind: ReplicaSet
+kind: Deployment
 metadata:
-  name: mongodbrs
+  name: mongodb
+  namespace: test1
 spec:
+  replicas: 1
   selector:
     matchLabels:
-      app: mongodb
+      app: mongo
   template:
-     metadata:
-       name: mongodbpod
-       labels:
-         app: mongodb
-     spec:
-       volumes:
-       - name: mongodb-pvc
-         persistentVolumeClaim:
-           claimName: pvc-hostpath
-       containers:
-       - name: mongodbcontainer
-         image: mongo
-         ports:
-         - containerPort: 27017
-         env:
-         - name: MONGO_INITDB_ROOT_USERNAME
-           valueFrom:
-             configMapKeyRef:
-               name: springappconfigmap
-               key: username
-         - name: MONGO_INITDB_ROOT_PASSWORD
-           valueFrom:
-             secretKeyRef:
-               name: springappsecrets
-               key: password
-         volumeMounts:
-         - name: mongodb-pvc
-           mountPath: /data/db
+    metadata:
+      name: myapp
+      labels:
+        app: mongo
+    spec:
+      containers:
+      - name: mongodbcontainer
+        image: mongo
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: devdb
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          value: devdb@123
+        volumeMounts:
+        - name: mogodbvol
+          mountPath: /data/db
+      volumes:
+      - name: mogodbvol
+        nfs:
+          server: 172.31.32.185
+          path: /mnt/nfs_sharevol
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mongo-hpa
+  namespace: test1
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mongodb
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 40
+  - type: Resource
+    resource:
+     name: memory
+     target:
+      type: Utilization
+      averageUtilization: 40
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mongo
+  name: mongosvc
+  namespace: test1
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
-    app: mongodb
+    app: mongo
   ports:
   - port: 27017
     targetPort: 27017
